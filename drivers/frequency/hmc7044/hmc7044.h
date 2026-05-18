@@ -66,6 +66,7 @@ struct hmc7044_dev {
 	uint32_t	pfd1_limit;
 	uint32_t	pll1_cp_current;
 	uint32_t	pll2_freq;
+	bool		pll2_freq_doubler_disable;
 	uint32_t	pll1_loop_bw;
 	uint32_t	sysref_timer_div;
 	unsigned int	pll1_ref_prio_ctrl;
@@ -104,6 +105,7 @@ struct hmc7044_init_param {
 	uint32_t	pfd1_limit;
 	uint32_t	pll1_cp_current;
 	uint32_t	pll2_freq;
+	bool		pll2_freq_doubler_disable;
 	uint32_t	pll1_loop_bw;
 	uint32_t	sysref_timer_div;
 	unsigned int	pll1_ref_prio_ctrl;
@@ -157,6 +159,10 @@ int32_t hmc7044_init(struct hmc7044_dev **device,
 /* Remove the device. */
 int32_t hmc7044_remove(struct hmc7044_dev *device);
 int32_t hmc7044_read(struct hmc7044_dev *dev, uint16_t reg, uint8_t *val);
+int32_t hmc7044_requestsysref(struct hmc7044_dev *dev);
+int32_t hmc7044_init_from_visual_analyzer(struct hmc7044_dev *dev,
+					  const char *hmc_refclk,
+					  const char *lane_rate);
 int32_t hmc7044_clk_recalc_rate(struct hmc7044_dev *dev, uint32_t chan_num,
 				uint64_t *rate);
 int32_t hmc7044_clk_round_rate(struct hmc7044_dev *dev, uint32_t rate,

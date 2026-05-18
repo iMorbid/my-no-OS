@@ -30,6 +30,7 @@ SRCS += $(DRIVERS)/axi_core/axi_adc_core/axi_adc_core.c \
 	$(DRIVERS)/axi_core/jesd204/axi_jesd204_rx.c \
 	$(DRIVERS)/axi_core/jesd204/axi_jesd204_tx.c \
 	$(DRIVERS)/axi_core/jesd204/jesd204_clk.c \
+	$(DRIVERS)/frequency/hmc7044/hmc7044.c\
 	$(NO-OS)/util/no_os_clk.c \
 	$(NO-OS)/util/no_os_util.c \
 	$(NO-OS)/util/no_os_alloc.c \
@@ -88,6 +89,7 @@ INCS +=	$(PROJECT)/src/app/app_config.h \
 INCS += $(DRIVERS)/axi_core/axi_adc_core/axi_adc_core.h \
 	$(DRIVERS)/axi_core/axi_dac_core/axi_dac_core.h \
 	$(DRIVERS)/axi_core/axi_dmac/axi_dmac.h \
+	$(DRIVERS)/frequency/hmc7044/hmc7044.h \
 	$(DRIVERS)/axi_core/jesd204/axi_jesd204_rx.h \
 	$(DRIVERS)/axi_core/jesd204/axi_jesd204_tx.h \
 	$(DRIVERS)/axi_core/jesd204/jesd204_clk.h

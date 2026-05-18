@@ -41,6 +41,11 @@
 #include "no_os_util.h"
 #include "no_os_error.h"
 #include "no_os_delay.h"
+#include "no_os_spi.h"
+#include "xilinx_spi.h"
+#include "no_os_gpio.h"
+#include "xilinx_gpio.h"
+#include "hmc7044.h"
 #ifdef ALTERA_PLATFORM
 #include "clk_altera_a10_fpll.h"
 #include "altera_adxcvr.h"
@@ -63,8 +68,10 @@
 #include "iio_app.h"
 #include "xilinx_uart.h"
 
+
+
 #endif // IIO_SUPPORT
-extern ad9528Device_t clockAD9528_;
+// extern ad9528Device_t clockAD9528_;
 extern mykonosDevice_t mykDevice;
 
 #if defined(DMA_EXAMPLE) || defined(IIO_SUPPORT)
@@ -78,7 +85,91 @@ uint16_t adc_buffer[ADC_BUFFER_SAMPLES * ADC_CHANNELS] __attribute__((
 int main(void)
 {
 	ADI_ERR error;
-	ad9528Device_t *clockAD9528_device = &clockAD9528_;
+
+	struct xil_spi_init_param xil_spi_param = {
+		.type = SPI_PS,
+		.flags = 0
+		// SPI_CS_DECODE
+	};
+	struct no_os_spi_init_param hmc7044_spi_param = {
+		.device_id = HMC7044_SPI_DEVICE_ID,
+		.max_speed_hz = 1000000,
+		.mode = NO_OS_SPI_MODE_0,
+		.chip_select = HMC7044_CS,
+		.platform_ops = &xil_spi_ops,
+		.extra = &xil_spi_param,
+		.bit_order    = NO_OS_SPI_BIT_ORDER_MSB_FIRST
+	};
+
+	struct hmc7044_chan_spec chan_spec[4] = {
+		/* hmc7044_c0: channel@0 */
+		{
+			.disable = 0, .num = 0, .divider = 20, .driver_mode = 0,
+			.driver_impedance = 1,
+			.start_up_mode_dynamic_enable = false,
+			.high_performance_mode_dis = false
+		},
+		/* hmc7044_c10: channel@10 */
+		{
+			.disable = 0, .num = 10, .divider = 20, .driver_mode = 0,
+			.driver_impedance = 1,
+			.start_up_mode_dynamic_enable = false,
+			.high_performance_mode_dis = false
+		},
+		/* hmc7044_c11: channel@11 */
+		{
+			.disable = 0, .num = 11, .divider = 2000, .driver_mode = 1,
+			.force_mute_enable = true,
+			.is_sysref = true,
+			.start_up_mode_dynamic_enable = false,
+			.high_performance_mode_dis = false
+		},
+		/* hmc7044_c13: channel@13 */
+		{
+			.disable = 0, .num = 13, .divider = 2000, .driver_mode = 1,
+			.force_mute_enable = true,
+			.is_sysref = true,
+			.start_up_mode_dynamic_enable = false,
+			.high_performance_mode_dis = false
+		},
+	};
+
+	struct hmc7044_init_param hmc7044_param = {
+		.spi_init = &hmc7044_spi_param,
+		.is_hmc7043 = false,
+		.clkin_freq = {0, 0, 0, 0},
+		.vcxo_freq = 122880000,
+		.pll2_freq = 2457600000,
+		.pll2_freq_doubler_disable = false,
+		.pll1_loop_bw = 200,
+		.sysref_timer_div = 1024,
+		.pulse_gen_mode = HMC7044_PULSE_GEN_CONT_PULSE,
+		.in_buf_mode = {0, 0, 0, 0, 0x07},
+		.gpi_ctrl = {0x00, 0x00, 0x00, 0x00},
+		.gpo_ctrl = {0x00, 0x00, 0x00, 0x00},
+		.num_channels = 4,
+		.channels = chan_spec,
+		.jesd204_max_sysref_frequency_hz = 2000000,
+		.rf_reseeder_disable             = true,
+		.jesd204_sysref_provider         = true,
+		.sync_pin_mode                   = 1
+	};
+    struct hmc7044_dev *hmc7044_device = NULL;
+	
+    //tcf add
+    // struct no_os_spi_desc hmc7044_spi_desc = {
+	//     //.bus          =
+	//     .device_id    = 1,
+	//     .max_speed_hz = 1000000u,
+	//     .chip_select  = HMC7044_CS,
+	//     .mode         = NO_OS_SPI_MODE_0,
+	//     .bit_order    = NO_OS_SPI_BIT_ORDER_MSB_FIRST,
+	//     //.lanes        = ,
+	//     .platform_ops =  &xil_spi_ops,
+	//     //.platform_delays = ,
+	//     .extra        = &xil_spi_param
+	// };
+
 	mykonosErr_t mykError;
 	const char *errorString;
 	uint8_t pllLockStatus;
@@ -102,6 +193,13 @@ int main(void)
 				   TRACK_RX2_QEC | TRACK_TX1_QEC | TRACK_TX2_QEC;
 	int32_t status;
 	int32_t ret;
+	 uint8_t *data=NULL;
+    
+	uint64_t hmc7044_device_clk_hz = 0;
+	
+   
+	// ret = hmc7044_clk_recalc_rate(hmc7044_device, 0, &hmc7044_device_clk_hz);
+
 #ifdef ALTERA_PLATFORM
 	struct altera_a10_fpll_init rx_device_clk_pll_init = {
 		"rx_device_clk_pll",
@@ -125,17 +223,21 @@ int main(void)
 	struct axi_clkgen_init rx_clkgen_init = {
 		"rx_clkgen",
 		RX_CLKGEN_BASEADDR,
-		clockAD9528_device->outputSettings->outFrequency_Hz[1]
+		
+		//clockAD9528_device->outputSettings->outFrequency_Hz[1]
+	    (uint32_t)hmc7044_device_clk_hz
 	};
 	struct axi_clkgen_init tx_clkgen_init = {
 		"tx_clkgen",
 		TX_CLKGEN_BASEADDR,
-		clockAD9528_device->outputSettings->outFrequency_Hz[1]
+		(uint32_t)hmc7044_device_clk_hz
+		//clockAD9528_device->outputSettings->outFrequency_Hz[1]
 	};
 	struct axi_clkgen_init rx_os_clkgen_init = {
 		"rx_os_clkgen",
 		RX_OS_CLKGEN_BASEADDR,
-		clockAD9528_device->outputSettings->outFrequency_Hz[1]
+		(uint32_t)hmc7044_device_clk_hz
+		//clockAD9528_device->outputSettings->outFrequency_Hz[1]
 	};
 	struct axi_clkgen *rx_clkgen;
 	struct axi_clkgen *tx_clkgen;
@@ -297,7 +399,6 @@ int main(void)
 	errorString = NULL;
 
 	printf("Please wait...\n");
-
 #ifdef XILINX_PLATFORM
 	/* Enable the instruction cache. */
 	Xil_ICacheEnable();
@@ -305,38 +406,62 @@ int main(void)
 	Xil_DCacheEnable();
 #endif //XILINX_PLATFORM
 
-	ret = platform_init();
+	
+    ret = platform_init();
 	if (ret != 0) {
 		printf("error: platform_init() failed\n");
 		goto error_0;
 	}
 
+	printf("HMC7044 AD9371 OS-aligned config: pll2=2457600000 Hz, ch=0/10/11/13\n");
+	status = hmc7044_init(&hmc7044_device, &hmc7044_param);
+	if (status != 0) {
+		xil_printf("hmc7044_init() error: %d\n", status);
+		return status;
+	}
+
+	/*
+	 * old: hmc7044_init_from_visual_analyzer(hmc7044_device,
+	 *                                        "122.88", "4915.2");
+	 * Keep the HMC7044 configuration inside hmc7044_init()/hmc7044_setup()
+	 * so PLL2 doubler, R/N dividers, output dividers and SYSREF timer stay
+	 * consistent.
+	 */
+
+	hmc7044_device_clk_hz = mykDevice.clocks->deviceClock_kHz * 1000;
+#ifndef ALTERA_PLATFORM
+	rx_clkgen_init.parent_rate = (uint32_t)hmc7044_device_clk_hz;
+	tx_clkgen_init.parent_rate = (uint32_t)hmc7044_device_clk_hz;
+	rx_os_clkgen_init.parent_rate = (uint32_t)hmc7044_device_clk_hz;
+#endif
 	/**************************************************************************/
 	/*****      System Clocks Initialization Initialization Sequence      *****/
 	/**************************************************************************/
 
 	/* Perform a hard reset on the AD9528 DUT */
-	error = AD9528_resetDevice(clockAD9528_device);
-	if (error != ADIERR_OK) {
-		printf("AD9528_resetDevice() failed\n");
-		error = ADIERR_FAILED;
-		goto error_1;
-	}
+	// error = AD9528_resetDevice(clockAD9528_device);
+	// if (error != ADIERR_OK) {
+	// 	printf("AD9528_resetDevice() failed\n");
+	// 	error = ADIERR_FAILED;
+	// 	goto error_1;
+	// }
 
-	error = AD9528_initDeviceDataStruct(clockAD9528_device,
-					    clockAD9528_device->pll1Settings->vcxo_Frequency_Hz,
-					    clockAD9528_device->pll1Settings->refA_Frequency_Hz,
-					    clockAD9528_device->outputSettings->outFrequency_Hz[1]);
-	if (error != ADIERR_OK) {
-		printf("AD9528_initDeviceDataStruct() failed\n");
-		error = ADIERR_FAILED;
-		goto error_1;
-	}
-
-	/* Initialize the AD9528 by writing all SPI registers */
-	error = AD9528_initialize(clockAD9528_device);
-	if (error != ADIERR_OK)
-		printf("WARNING: AD9528_initialize() issues. Possible cause: REF_CLK not connected.\n");
+	// error = AD9528_initDeviceDataStruct(clockAD9528_device,
+	// 				    clockAD9528_device->pll1Settings->vcxo_Frequency_Hz,
+	// 				    clockAD9528_device->pll1Settings->refA_Frequency_Hz,
+	// 				    clockAD9528_device->outputSettings->outFrequency_Hz[1]);
+	// if (error != ADIERR_OK) {
+	// 	printf("AD9528_initDeviceDataStruct() failed\n");
+	// 	error = ADIERR_FAILED;
+	// 	goto error_1;
+	// }
+// CMB_SPIWriteByte(clockAD9528_device->spiSettings, AD9528_ADDR_ADI_SPI_CONFIG_B, 0x01);
+// 	CMB_SPIReadByte(clockAD9528_device->spiSettings, AD9528_ADDR_ADI_SPI_CONFIG_B, &data);
+// 	printf("data = 0x%02x\n", data);
+// 	/* Initialize the AD9528 by writing all SPI registers */
+	// error = AD9528_initialize(clockAD9528_device);
+// 	if (error != ADIERR_OK)
+// 		printf("WARNING: AD9528_initialize() issues. Possible cause: REF_CLK not connected.\n");
 
 #ifdef ALTERA_PLATFORM
 	/* Initialize A10 FPLLs */
@@ -495,14 +620,23 @@ int main(void)
 
 	/* Minimum 3 SYSREF pulses from Clock Device has to be produced for MulticChip Sync */
 
-	AD9528_requestSysref(clockAD9528_device, 1);
+	// AD9528_requestSysref(clockAD9528_device, 1);
+	// no_os_mdelay(1);
+	// AD9528_requestSysref(clockAD9528_device, 1);
+	// no_os_mdelay(1);
+	// AD9528_requestSysref(clockAD9528_device, 1);
+	// no_os_mdelay(1);
+	// AD9528_requestSysref(clockAD9528_device, 1);
+	// no_os_mdelay(1);
+	hmc7044_requestsysref(hmc7044_device);
 	no_os_mdelay(1);
-	AD9528_requestSysref(clockAD9528_device, 1);
+	hmc7044_requestsysref(hmc7044_device);
 	no_os_mdelay(1);
-	AD9528_requestSysref(clockAD9528_device, 1);
+	hmc7044_requestsysref(hmc7044_device);
 	no_os_mdelay(1);
-	AD9528_requestSysref(clockAD9528_device, 1);
+	hmc7044_requestsysref(hmc7044_device);
 	no_os_mdelay(1);
+
 
 	/*************************************************************************/
 	/*****                Mykonos Verify MultiChip Sync                 *****/
@@ -550,20 +684,33 @@ int main(void)
 	/*****                Mykonos Set RF PLL Frequencies                 *****/
 	/*************************************************************************/
 
+	printf("Setting RX RF PLL to %lu Hz\n",
+	       (unsigned long)mykDevice.rx->rxPllLoFrequency_Hz);
 	if ((mykError = MYKONOS_setRfPllFrequency(&mykDevice, RX_PLL,
 			mykDevice.rx->rxPllLoFrequency_Hz)) != MYKONOS_ERR_OK) {
+		printf("MYKONOS_setRfPllFrequency(RX_PLL, %lu) failed: %d\n",
+		       (unsigned long)mykDevice.rx->rxPllLoFrequency_Hz, mykError);
 		errorString = getMykonosErrorMessage(mykError);
 		goto error_11;
 	}
 
+	printf("Setting TX RF PLL to %lu Hz\n",
+	       (unsigned long)mykDevice.tx->txPllLoFrequency_Hz);
 	if ((mykError = MYKONOS_setRfPllFrequency(&mykDevice, TX_PLL,
 			mykDevice.tx->txPllLoFrequency_Hz)) != MYKONOS_ERR_OK) {
+		printf("MYKONOS_setRfPllFrequency(TX_PLL, %lu) failed: %d\n",
+		       (unsigned long)mykDevice.tx->txPllLoFrequency_Hz, mykError);
 		errorString = getMykonosErrorMessage(mykError);
 		goto error_11;
 	}
 
+	printf("Setting SNIFFER RF PLL to %lu Hz\n",
+	       (unsigned long)mykDevice.obsRx->snifferPllLoFrequency_Hz);
 	if ((mykError = MYKONOS_setRfPllFrequency(&mykDevice, SNIFFER_PLL,
 			mykDevice.obsRx->snifferPllLoFrequency_Hz)) != MYKONOS_ERR_OK) {
+		printf("MYKONOS_setRfPllFrequency(SNIFFER_PLL, %lu) failed: %d\n",
+		       (unsigned long)mykDevice.obsRx->snifferPllLoFrequency_Hz,
+		       mykError);
 		errorString = getMykonosErrorMessage(mykError);
 		goto error_11;
 	}
@@ -786,8 +933,11 @@ int main(void)
 	/*************************************************************************/
 
 	/* Request a SYSREF from the AD9528 */
-	AD9528_requestSysref(clockAD9528_device, 1);
-	no_os_mdelay(1);
+	// AD9528_requestSysref(clockAD9528_device, 1);
+	// no_os_mdelay(1);
+	hmc7044_requestsysref(hmc7044_device);
+	// hmc7044_requestsysref(hmc7044_device);   // 第一处
+    no_os_mdelay(1);
 
 	/*** < Info: Mykonos is actively transmitting CGS from the RxFramer> ***/
 
@@ -811,10 +961,18 @@ int main(void)
 	axi_jesd204_rx_lane_clk_enable(rx_os_jesd);
 
 	/* Request two SYSREFs from the AD9528 */
-	AD9528_requestSysref(clockAD9528_device, 1);
+	// AD9528_requestSysref(clockAD9528_device, 1);
+	// no_os_mdelay(1);
+	// AD9528_requestSysref(clockAD9528_device, 1);
+	// no_os_mdelay(5);
+	hmc7044_requestsysref(hmc7044_device);
 	no_os_mdelay(1);
-	AD9528_requestSysref(clockAD9528_device, 1);
+	hmc7044_requestsysref(hmc7044_device);
 	no_os_mdelay(5);
+	// hmc7044_requestsysref(hmc7044_device);   // 第二处 ×2
+    // no_os_mdelay(1);
+    // hmc7044_requestsysref(hmc7044_device);
+    // no_os_mdelay(5);
 
 	/*************************************************************************/
 	/*****               Check Mykonos Framer Status                     *****/

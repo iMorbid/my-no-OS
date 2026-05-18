@@ -37,6 +37,7 @@
 #include "no_os_error.h"
 #include "no_os_mutex.h"
 #include "no_os_alloc.h"
+#include <stdio.h>
 
 /**
  * @brief spi_table contains the pointers towards the SPI buses
@@ -162,11 +163,15 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc,
 {
 	int32_t ret;
 
-	if (!desc || !desc->platform_ops)
+	if (!desc || !desc->platform_ops) {
+		printf("!desc || !desc->platform_ops\n");
 		return -EINVAL;
+	}
 
-	if (!desc->platform_ops->write_and_read)
+	if (!desc->platform_ops->write_and_read) {
+		printf("!desc->platform_ops->write_and_read\n");
 		return -ENOSYS;
+	}
 
 	no_os_mutex_lock(desc->bus->mutex);
 	ret =  desc->platform_ops->write_and_read(desc, data, bytes_number);

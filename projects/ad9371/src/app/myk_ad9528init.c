@@ -13,7 +13,7 @@ static spiSettings_t clockSpiSettings =
         0, //Clock polarity
         0,//uint8_t enSpiStreaming;
         1,//uint8_t autoIncAddrUp;
-        1 //uint8_t fourWireMode;
+        0 //uint8_t fourWireMode;
 };
 
 ad9528pll1Settings_t clockPll1Settings =

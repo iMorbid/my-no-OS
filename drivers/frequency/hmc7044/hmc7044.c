@@ -19,7 +19,7 @@
  *    contributors may be used to endorse or promote products derived from this
  *    software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY ANALOG DEVICES, INC. “AS IS” AND ANY EXPRESS OR
+ * THIS SOFTWARE IS PROVIDED BY ANALOG DEVICES, INC. "AS IS" AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
  * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
  * EVENT SHALL ANALOG DEVICES, INC. BE LIABLE FOR ANY DIRECT, INDIRECT,
@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <limits.h>
+#include <string.h>
 #include "no_os_print_log.h"
 #include "no_os_error.h"
 #include "no_os_util.h"
@@ -181,9 +182,11 @@
 /* Status and Alarm readback */
 #define HMC7044_REG_ALARM_READBACK	0x007D
 #define HMC7044_REG_PLL1_STATUS		0x0082
+#define HMC7044_REG_PLL2_STATUS_TV	0x008C
 
 #define HMC7044_PLL1_FSM_STATE(x)	((x) & 0x7)
 #define HMC7044_PLL1_ACTIVE_CLKIN(x)	(((x) >> 3) & 0x3)
+#define HMC7044_CAP_BANK_TUNEVAL(x)	((x) & 0x1F)
 
 #define HMC7044_PLL2_LOCK_DETECT(x)	((x) & 0x1)
 #define HMC7044_SYSREF_SYNC_STAT(x)	((x) & 0x2)
@@ -268,6 +271,13 @@ struct hmc7044_jesd204_priv {
 	struct hmc7044_dev *hmc;
 };
 
+static int hmc7044_toggle_bit(struct hmc7044_dev *dev,
+			      unsigned int reg,
+			      unsigned int mask,
+			      unsigned int us_delay);
+static int hmc7044_info(struct hmc7044_dev *dev);
+static int hmc7044_debug_readback(struct hmc7044_dev *dev, const char *tag);
+
 /**
  * SPI register write to device.
  * @param dev - The device structure.
@@ -318,15 +328,195 @@ int32_t hmc7044_read(struct hmc7044_dev *dev, uint16_t reg, uint8_t *val)
 	return 0;
 }
 
+int32_t hmc7044_requestsysref(struct hmc7044_dev *dev)
+{
+	if (!dev)
+		return -EINVAL;
+
+	return hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
+				  HMC7044_PULSE_GEN_REQ, 0);
+}
+
+int32_t hmc7044_init_from_visual_analyzer(struct hmc7044_dev *dev,
+					  const char *hmc_refclk,
+					  const char *lane_rate)
+{
+	int ret;
+	uint8_t alarm_stat;
+	uint8_t cap_bank;
+	uint8_t pll2_r_lsb = 0x01;
+	uint8_t pll2_r_msb = 0x00;
+	uint8_t pll2_n_lsb = 0x19;
+	uint8_t pll2_n_msb = 0x00;
+	uint8_t pll2_doubler = HMC7044_PLL2_FREQ_DOUBLER_DIS;
+
+	if (!dev || !hmc_refclk || !lane_rate)
+		return -EINVAL;
+
+#define HMC_WR(addr, data)					\
+	do {							\
+		ret = hmc7044_write(dev, addr, data);		\
+		if (ret)					\
+			return ret;				\
+	} while (0)
+
+	if (strcmp(hmc_refclk, "122.88") == 0) {
+		dev->vcxo_freq = 122880000;
+		pll2_n_lsb = 0x19;
+	} else if (strcmp(hmc_refclk, "153.6") == 0) {
+		dev->vcxo_freq = 153600000;
+		pll2_n_lsb = 0x14;
+	} else if ((strcmp(hmc_refclk, "107.52") == 0) ||
+		   (strcmp(hmc_refclk, "110.592") == 0)) {
+		dev->vcxo_freq = (strcmp(hmc_refclk, "107.52") == 0) ?
+				  107520000 : 110592000;
+		pll2_n_lsb = 0x1C;
+	} else {
+		dev->vcxo_freq = 122880000;
+		pll2_n_lsb = 0x19;
+	}
+
+	dev->pll2_freq = 3072000000;
+
+	if (strcmp(lane_rate, "614.4") == 0) {
+		HMC_WR(0x00C9, 0x32);
+		HMC_WR(0x012D, 0xC8);
+		HMC_WR(0x0137, 0x80);
+		HMC_WR(0x0138, 0x0C);
+		HMC_WR(0x005C, 0x80);
+		HMC_WR(0x005D, 0x0C);
+	} else if (strcmp(lane_rate, "768") == 0) {
+		HMC_WR(0x00C9, 0x28);
+		HMC_WR(0x012D, 0xA0);
+		HMC_WR(0x0137, 0x00);
+		HMC_WR(0x0138, 0x0A);
+		HMC_WR(0x005C, 0x00);
+		HMC_WR(0x005D, 0x0A);
+	} else if (strcmp(lane_rate, "1228.8") == 0) {
+		HMC_WR(0x00C9, 0x64);
+		HMC_WR(0x012D, 0x64);
+		HMC_WR(0x0137, 0x80);
+		HMC_WR(0x0138, 0x0C);
+		HMC_WR(0x005C, 0x80);
+		HMC_WR(0x005D, 0x0C);
+	} else if (strcmp(lane_rate, "1536") == 0) {
+		HMC_WR(0x00C9, 0x50);
+		HMC_WR(0x012D, 0x50);
+		HMC_WR(0x0137, 0x00);
+		HMC_WR(0x0138, 0x0A);
+		HMC_WR(0x005C, 0x00);
+		HMC_WR(0x005D, 0x0A);
+	} else if (strcmp(lane_rate, "2457.6") == 0) {
+		dev->pll2_freq = 2949120000;
+		pll2_n_lsb = 0x18;
+		HMC_WR(0x00C9, 0x30);
+		HMC_WR(0x012D, 0x30);
+		HMC_WR(0x0137, 0x00);
+		HMC_WR(0x0138, 0x0C);
+		HMC_WR(0x005C, 0x00);
+		HMC_WR(0x005D, 0x0C);
+	} else if (strcmp(lane_rate, "3072") == 0) {
+		HMC_WR(0x00C9, 0x28);
+		HMC_WR(0x012D, 0x28);
+		HMC_WR(0x0137, 0x00);
+		HMC_WR(0x0138, 0x0A);
+		HMC_WR(0x005C, 0x00);
+		HMC_WR(0x005D, 0x0A);
+	} else if ((strcmp(lane_rate, "4300.8") == 0) ||
+		   (strcmp(lane_rate, "4423.68") == 0)) {
+		HMC_WR(0x00C9, 0x1C);
+		HMC_WR(0x012D, 0x1C);
+		HMC_WR(0x0137, 0x00);
+		HMC_WR(0x0138, 0x06);
+		HMC_WR(0x005C, 0x00);
+		HMC_WR(0x005D, 0x06);
+	} else if (strcmp(lane_rate, "4915.2") == 0) {
+		dev->pll2_freq = 2949120000;
+		pll2_n_lsb = 0x18;
+		HMC_WR(0x00C9, 0x18);
+		HMC_WR(0x012D, 0x18);
+		HMC_WR(0x0137, 0x00);
+		HMC_WR(0x0138, 0x06);
+		HMC_WR(0x005C, 0x00);
+		HMC_WR(0x005D, 0x06);
+	} else if (strcmp(lane_rate, "6144") == 0) {
+		HMC_WR(0x00C9, 0x14);
+		HMC_WR(0x012D, 0x14);
+		HMC_WR(0x0137, 0x00);
+		HMC_WR(0x0138, 0x05);
+		HMC_WR(0x005C, 0x00);
+		HMC_WR(0x005D, 0x05);
+	} else {
+		return -EINVAL;
+	}
+
+	/* Datasheet flow: R2/N2 first, then VCO core + PLL2 enable. */
+	HMC_WR(0x0032, pll2_doubler);
+	HMC_WR(0x0033, pll2_r_lsb);
+	HMC_WR(0x0034, pll2_r_msb);
+	HMC_WR(0x0035, pll2_n_lsb);
+	HMC_WR(0x0036, pll2_n_msb);
+	HMC_WR(0x0003, 0x0E);
+
+	HMC_WR(0x00D0, 0x01);
+	HMC_WR(0x0134, 0x01);
+	HMC_WR(0x013E, 0x88);
+	HMC_WR(0x005A, 0x01);
+
+	/*
+	 * The datasheet requires the VCXO input and VCO peak detector loop to
+	 * settle before toggling restart dividers/FSMs to trigger autotune.
+	 */
+	no_os_mdelay(100);
+
+	ret = hmc7044_debug_readback(dev, "before-autotune");
+	if (ret)
+		return ret;
+
+	HMC_WR(0x0001, 0x02);
+	HMC_WR(0x0001, 0x00);
+
+#undef HMC_WR
+
+	no_os_mdelay(10);
+
+	ret = hmc7044_read(dev, HMC7044_REG_PLL2_STATUS_TV, &cap_bank);
+	if (ret)
+		return ret;
+
+	ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &alarm_stat);
+	if (ret)
+		return ret;
+
+	pr_info("HMC7044 autotune result: cap_bank=%u raw_0x008C=0x%02X pll2_lock=%u alarm=0x%02X\n",
+		HMC7044_CAP_BANK_TUNEVAL(cap_bank), cap_bank,
+		!!HMC7044_PLL2_LOCK_DETECT(alarm_stat), alarm_stat);
+
+	if (!HMC7044_CAP_BANK_TUNEVAL(cap_bank))
+		pr_warning("HMC7044 autotune warning: capacitor bank value is 0\n");
+
+	if (!HMC7044_PLL2_LOCK_DETECT(alarm_stat))
+		pr_warning("HMC7044 autotune warning: PLL2 is not locked after restart\n");
+
+	no_os_mdelay(10);
+
+	ret = hmc7044_debug_readback(dev, "visual-analyzer");
+	if (ret)
+		return ret;
+
+	return hmc7044_info(dev);
+}
+
 static void hmc7044_read_write_check(struct hmc7044_dev *dev)
 {
 	uint8_t val;
 
 	hmc7044_write(dev, HMC7044_REG_SCRATCHPAD, 0xAD);
+
 	hmc7044_read(dev, HMC7044_REG_SCRATCHPAD, &val);
 
 	dev->read_write_confirmed = (val == 0xAD);
-
+	pr_warning("Read/Write check SUCCESS (0x%X)\n", val);
 	if (!dev->read_write_confirmed)
 		pr_warning("Read/Write check failed (0x%X)\n", val);
 }
@@ -474,6 +664,7 @@ static int hmc7044_info(struct hmc7044_dev *dev)
 {
 	uint32_t clkin_freq, active;
 	uint8_t alarm_stat = 0, pll1_stat = 0;
+	bool pll1_ref_en;
 	int ret;
 
 	if (!dev->read_write_confirmed) {
@@ -481,7 +672,12 @@ static int hmc7044_info(struct hmc7044_dev *dev)
 		return 0;
 	}
 
-	if (!dev->is_hmc7043 && !dev->clkin1_vcoin_en) {
+	pll1_ref_en = dev->clkin_freq[0] || dev->clkin_freq[1] ||
+		      dev->clkin_freq[2] || dev->clkin_freq[3] ||
+		      dev->clkin_freq_ccf[0] || dev->clkin_freq_ccf[1] ||
+		      dev->clkin_freq_ccf[2] || dev->clkin_freq_ccf[3];
+
+	if (!dev->is_hmc7043 && !dev->clkin1_vcoin_en && pll1_ref_en) {
 		ret = hmc7044_read(dev,
 				   HMC7044_REG_PLL1_STATUS, &pll1_stat);
 		if (ret < 0)
@@ -502,7 +698,11 @@ static int hmc7044_info(struct hmc7044_dev *dev)
 
 		active = HMC7044_PLL1_ACTIVE_CLKIN(pll1_stat);
 	} else {
-		active = 1;
+		ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &alarm_stat);
+		if (ret < 0)
+			return ret;
+
+		active = 0;
 	}
 
 	if (dev->is_hmc7043)
@@ -513,16 +713,79 @@ static int hmc7044_info(struct hmc7044_dev *dev)
 	else
 		clkin_freq = dev->clkin_freq[active];
 
-	if (!dev->is_hmc7043 && !dev->clkin1_vcoin_en)
+	if (!dev->is_hmc7043 && !dev->clkin1_vcoin_en && pll1_ref_en)
 		pr_info("PLL1: %s, CLKIN%u @ %u Hz, PFD: %u kHz - PLL2: %s @ %u.%06u MHz\n",
 			pll1_fsm_states[HMC7044_PLL1_FSM_STATE(pll1_stat)],
 			active, clkin_freq, dev->pll1_pfd,
 			HMC7044_PLL2_LOCK_DETECT(alarm_stat) ?
 			"Locked" : "Unlocked", dev->pll2_freq / 1000000,
 			dev->pll2_freq % 1000000);
+	else if (!dev->is_hmc7043 && !dev->clkin1_vcoin_en)
+		pr_info("PLL1 disabled - PLL2: %s @ %u.%06u MHz\n",
+			HMC7044_PLL2_LOCK_DETECT(alarm_stat) ?
+			"Locked" : "Unlocked", dev->pll2_freq / 1000000,
+			dev->pll2_freq % 1000000);
 	else
 		pr_info("CLKIN%u @ %u.%06u MHz\n", active,
 			clkin_freq / 1000000, clkin_freq % 1000000);
+
+	return 0;
+}
+
+static int hmc7044_debug_readback(struct hmc7044_dev *dev, const char *tag)
+{
+	static const struct {
+		uint16_t reg;
+		const char *name;
+	} regs[] = {
+		{ HMC7044_REG_EN_CTRL_0, "EN_CTRL_0" },
+		{ HMC7044_REG_GLOB_MODE, "GLOB_MODE" },
+		{ HMC7044_REG_CLKIN0_BUF_CTRL, "CLKIN0_BUF" },
+		{ HMC7044_REG_CLKIN1_BUF_CTRL, "CLKIN1_BUF" },
+		{ HMC7044_REG_CLKIN2_BUF_CTRL, "CLKIN2_BUF" },
+		{ HMC7044_REG_CLKIN3_BUF_CTRL, "CLKIN3_BUF" },
+		{ HMC7044_REG_OSCIN_BUF_CTRL, "OSCIN_BUF" },
+		{ HMC7044_REG_PLL2_FREQ_DOUBLER, "PLL2_DOUBLER" },
+		{ HMC7044_REG_PLL2_R_LSB, "PLL2_R_LSB" },
+		{ HMC7044_REG_PLL2_R_MSB, "PLL2_R_MSB" },
+		{ HMC7044_REG_PLL2_N_LSB, "PLL2_N_LSB" },
+		{ HMC7044_REG_PLL2_N_MSB, "PLL2_N_MSB" },
+		{ HMC7044_REG_SYSREF_TIMER_LSB, "SYSREF_LSB" },
+		{ HMC7044_REG_SYSREF_TIMER_MSB, "SYSREF_MSB" },
+		{ HMC7044_REG_PULSE_GEN, "PULSE_GEN" },
+		{ HMC7044_REG_REQ_MODE_1, "REQ_MODE_1" },
+		{ HMC7044_REG_ALARM_READBACK, "ALARM" },
+		{ HMC7044_REG_PLL2_STATUS_TV, "PLL2_STATUS_TV" },
+	};
+	uint8_t val;
+	uint32_t i;
+	int ret;
+
+	for (i = 0; i < NO_OS_ARRAY_SIZE(regs); i++) {
+		ret = hmc7044_read(dev, regs[i].reg, &val);
+		if (ret)
+			return ret;
+
+		pr_info("HMC7044 %s: %s[0x%04X] = 0x%02X\n",
+			tag, regs[i].name, regs[i].reg, val);
+	}
+
+	ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &val);
+	if (ret)
+		return ret;
+	pr_info("HMC7044 %s: pll2_lock=%u sysref_sync=%u clkout_phase=%u pll1_pll2_lock=%u sync_req=%u\n",
+		tag,
+		!!HMC7044_PLL2_LOCK_DETECT(val),
+		!!HMC7044_SYSREF_SYNC_STAT(val),
+		!!HMC7044_CLK_OUT_PH_STATUS(val),
+		!!HMC7044_PLL1_PLL2_LOCK_STAT(val),
+		!!HMC7044_SYNC_REQ_STATUS(val));
+
+	ret = hmc7044_read(dev, HMC7044_REG_PLL2_STATUS_TV, &val);
+	if (ret)
+		return ret;
+	pr_info("HMC7044 %s: pll2_cap_bank_tuneval=%u\n",
+		tag, HMC7044_CAP_BANK_TUNEVAL(val));
 
 	return 0;
 }
@@ -536,6 +799,7 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 {
 	struct hmc7044_chan_spec *chan;
 	bool high_vco_en;
+	bool pll1_en;
 	bool pll2_freq_doubler_en;
 	uint32_t vcxo_freq, pll2_freq;
 	uint32_t clkin_freq[4];
@@ -548,6 +812,8 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 	uint32_t vco_limit;
 	uint32_t n2[2], r2[2];
 	uint32_t i, c, ref_en = 0;
+	uint8_t pll2_alarm, pll2_status;
+	uint32_t pll2_wait_ms;
 	int ret;
 
 	vcxo_freq = dev->vcxo_freq / 1000;
@@ -565,6 +831,7 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 			ref_en |= NO_OS_BIT(i);
 		}
 	}
+	pll1_en = ref_en ? true : false;
 
 	while (lcm_freq > HMC7044_RECOMM_LCM_MAX)
 		lcm_freq /= 2;
@@ -616,12 +883,14 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 		high_vco_en = false;
 
 	/* fVCO / N2 = fVCXO * doubler / R2 */
-	pll2_freq_doubler_en = true;
-	no_os_rational_best_approximation(pll2_freq, vcxo_freq * 2,
+	pll2_freq_doubler_en = !dev->pll2_freq_doubler_disable;
+	no_os_rational_best_approximation(pll2_freq,
+					  vcxo_freq * (pll2_freq_doubler_en ? 2 : 1),
 					  HMC7044_N2_MAX, HMC7044_R2_MAX,
 					  &n2[0], &r2[0]);
 
-	if (pll2_freq != vcxo_freq * n2[0] / r2[0]) {
+	if (!dev->pll2_freq_doubler_disable &&
+	    pll2_freq != vcxo_freq * n2[0] / r2[0]) {
 		no_os_rational_best_approximation(pll2_freq, vcxo_freq,
 						  HMC7044_N2_MAX, HMC7044_R2_MAX,
 						  &n2[1], &r2[1]);
@@ -641,20 +910,18 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 	if (n2[0] < HMC7044_N2_MIN)
 		return -EINVAL;
 
+	pr_info("HMC7044 PLL2 calc: vcxo=%u kHz pll2=%u kHz r2=%u n2=%u doubler=%u high_vco=%u pll1_en=%u\n",
+		vcxo_freq, pll2_freq, r2[0], n2[0], pll2_freq_doubler_en,
+		high_vco_en, pll1_en);
+
 	/* Resets all registers to default values */
 	ret = hmc7044_toggle_bit(dev, HMC7044_REG_SOFT_RESET,
 				 HMC7044_SOFT_RESET, 100);
 	if (ret)
 		return ret;
-
 	hmc7044_read_write_check(dev);
 
-	/* Disable all channels */
-	for (i = 0; i < HMC7044_NUM_CHAN; i++) {
-		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_0(i), 0);
-		if (ret)
-			return ret;
-	}
+	/* Linux OS working flow keeps this disabled in setup. */
 
 	/* Load the configuration updates (provided by Analog Devices) */
 	ret = hmc7044_write(dev, HMC7044_REG_CLK_OUT_DRV_LOW_PW, 0x4d);
@@ -674,18 +941,19 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 		return ret;
 
 
-	ret = hmc7044_write(dev, HMC7044_REG_GLOB_MODE,
-			    HMC7044_SYNC_PIN_MODE(dev->sync_pin_mode) |
-			    (dev->clkin0_rfsync_en ? HMC7044_RFSYNC_EN : 0) |
-			    (dev->clkin1_vcoin_en ? HMC7044_VCOIN_MODE_EN : 0) |
-			    HMC7044_REF_PATH_EN(ref_en));
-	if (ret)
-		return ret;
+	if (pll1_en || dev->clkin1_vcoin_en) {
+		ret = hmc7044_write(dev, HMC7044_REG_GLOB_MODE,
+				    HMC7044_SYNC_PIN_MODE(dev->sync_pin_mode) |
+				    (dev->clkin0_rfsync_en ? HMC7044_RFSYNC_EN : 0) |
+				    (dev->clkin1_vcoin_en ? HMC7044_VCOIN_MODE_EN : 0) |
+				    HMC7044_REF_PATH_EN(ref_en));
+		if (ret)
+			return ret;
+	}
 
 	/* Program PLL2 */
 
-	/* Select the VCO range */
-
+	/* Keep the PLL2 programming order aligned with the known-good Linux driver. */
 	if (dev->clkin1_vcoin_en) {
 		dev->pll2_freq = dev->clkin_freq_ccf[1] ?
 				 dev->clkin_freq_ccf[1] : dev->clkin_freq[1];
@@ -696,7 +964,9 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 			if (ret)
 				return ret;
 		}
+	}
 
+	if (dev->clkin1_vcoin_en) {
 		ret = hmc7044_write(dev, HMC7044_REG_EN_CTRL_0,
 				    (dev->rf_reseeder_en ? HMC7044_RF_RESEEDER_EN : 0) |
 				    HMC7044_VCO_SEL(0) |
@@ -711,15 +981,14 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 		ret = hmc7044_write(dev, HMC7044_REG_EN_CTRL_0,
 				    (dev->rf_reseeder_en ? HMC7044_RF_RESEEDER_EN : 0) |
 				    HMC7044_VCO_SEL(high_vco_en ?
-						    HMC7044_VCO_HIGH :
-						    HMC7044_VCO_LOW) |
+					    HMC7044_VCO_HIGH :
+					    HMC7044_VCO_LOW) |
 				    HMC7044_SYSREF_TIMER_EN | HMC7044_PLL2_EN |
-				    HMC7044_PLL1_EN);
+				    (pll1_en ? HMC7044_PLL1_EN : 0));
 		if (ret)
 			return ret;
 	}
 
-	/* Program the dividers */
 	ret = hmc7044_write(dev, HMC7044_REG_PLL2_R_LSB,
 			    HMC7044_R2_LSB(r2[0]));
 	if (ret)
@@ -737,61 +1006,68 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 	if (ret)
 		return ret;
 
-	/* Program the reference doubler */
 	ret = hmc7044_write(dev, HMC7044_REG_PLL2_FREQ_DOUBLER,
 			    pll2_freq_doubler_en ? 0 : HMC7044_PLL2_FREQ_DOUBLER_DIS);
 	if (ret)
 		return ret;
-	/* Program PLL1 */
 
-	ret = hmc7044_write(dev, HMC7044_REG_PLL1_CP_CTRL,
-			    HMC7044_PLL1_CP_CURRENT(dev->pll1_cp_current /
-					    HMC7044_CP_CURRENT_STEP - 1));
+	ret = hmc7044_debug_readback(dev, "after-pll2");
 	if (ret)
 		return ret;
-	/* Set the lock detect timer threshold */
-	ret = hmc7044_write(dev, HMC7044_REG_PLL1_LOCK_DETECT,
-			    HMC7044_LOCK_DETECT_TIMER(pll1_lock_detect));
 
-	/* Set the LCM */
-	for (i = 0; i < NO_OS_ARRAY_SIZE(clkin_freq); i++) {
-		ret = hmc7044_write(dev, HMC7044_REG_CLKIN_PRESCALER(i),
-				    in_prescaler[i]);
+	if (pll1_en) {
+		/* Program PLL1 only when a CLKIN reference is configured. */
+		ret = hmc7044_write(dev, HMC7044_REG_PLL1_CP_CTRL,
+				    HMC7044_PLL1_CP_CURRENT(dev->pll1_cp_current /
+						    HMC7044_CP_CURRENT_STEP - 1));
+		if (ret)
+			return ret;
+		/* Set the lock detect timer threshold */
+		ret = hmc7044_write(dev, HMC7044_REG_PLL1_LOCK_DETECT,
+				    HMC7044_LOCK_DETECT_TIMER(pll1_lock_detect));
+		if (ret)
+			return ret;
+
+		/* Set the LCM */
+		for (i = 0; i < NO_OS_ARRAY_SIZE(clkin_freq); i++) {
+			ret = hmc7044_write(dev, HMC7044_REG_CLKIN_PRESCALER(i),
+					    in_prescaler[i]);
+			if (ret)
+				return ret;
+		}
+		ret = hmc7044_write(dev, HMC7044_REG_OSCIN_PRESCALER,
+				    in_prescaler[4]);
+		if (ret)
+			return ret;
+		/* Program the dividers */
+		ret = hmc7044_write(dev, HMC7044_REG_PLL1_R_LSB,
+				    HMC7044_R2_LSB(r1));
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_PLL1_R_MSB,
+				    HMC7044_R2_MSB(r1));
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_PLL1_N_LSB,
+				    HMC7044_N2_LSB(n1));
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_PLL1_N_MSB,
+				    HMC7044_N2_MSB(n1));
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_PLL1_REF_PRIO_CTRL,
+				    dev->pll1_ref_prio_ctrl);
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_PLL1_REF_SWITCH,
+				    HMC7044_HOLDOVER_DAC |
+				    (dev->pll1_ref_autorevert_en ?
+				     HMC7044_AUTO_REVERT_SWITCH : 0) |
+				    HMC7044_AUTO_MODE_SWITCH);
 		if (ret)
 			return ret;
 	}
-	ret = hmc7044_write(dev, HMC7044_REG_OSCIN_PRESCALER,
-			    in_prescaler[4]);
-	if (ret)
-		return ret;
-	/* Program the dividers */
-	ret = hmc7044_write(dev, HMC7044_REG_PLL1_R_LSB,
-			    HMC7044_R2_LSB(r1));
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_PLL1_R_MSB,
-			    HMC7044_R2_MSB(r1));
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_PLL1_N_LSB,
-			    HMC7044_N2_LSB(n1));
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_PLL1_N_MSB,
-			    HMC7044_N2_MSB(n1));
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_PLL1_REF_PRIO_CTRL,
-			    dev->pll1_ref_prio_ctrl);
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_PLL1_REF_SWITCH,
-			    HMC7044_HOLDOVER_DAC |
-			    (dev->pll1_ref_autorevert_en ?
-			     HMC7044_AUTO_REVERT_SWITCH : 0) |
-			    HMC7044_AUTO_MODE_SWITCH);
-	if (ret)
-		return ret;
 	/* Program the SYSREF timer */
 
 	/* Set the divide ratio */
@@ -808,27 +1084,30 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 			    HMC7044_PULSE_GEN_MODE(dev->pulse_gen_mode));
 	if (ret)
 		return ret;
-	/* Enable the input buffers */
-	ret = hmc7044_write(dev, HMC7044_REG_CLKIN0_BUF_CTRL,
-			    dev->in_buf_mode[0]);
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_CLKIN1_BUF_CTRL,
-			    dev->in_buf_mode[1]);
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_CLKIN2_BUF_CTRL,
-			    dev->in_buf_mode[2]);
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_CLKIN3_BUF_CTRL,
-			    dev->in_buf_mode[3]);
-	if (ret)
-		return ret;
-	ret = hmc7044_write(dev, HMC7044_REG_OSCIN_BUF_CTRL,
-			    dev->in_buf_mode[4]);
-	if (ret)
-		return ret;
+
+	if (pll1_en || dev->clkin1_vcoin_en) {
+		/* Enable the input buffers. PLL2-only follows the OS driver defaults. */
+		ret = hmc7044_write(dev, HMC7044_REG_CLKIN0_BUF_CTRL,
+				    dev->in_buf_mode[0]);
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_CLKIN1_BUF_CTRL,
+				    dev->in_buf_mode[1]);
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_CLKIN2_BUF_CTRL,
+				    dev->in_buf_mode[2]);
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_CLKIN3_BUF_CTRL,
+				    dev->in_buf_mode[3]);
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_OSCIN_BUF_CTRL,
+				    dev->in_buf_mode[4]);
+		if (ret)
+			return ret;
+	}
 	/* Set GPIOs */
 	for (i = 0; i < NO_OS_ARRAY_SIZE(dev->gpi_ctrl); i++) {
 		ret = hmc7044_write(dev, HMC7044_REG_GPI_CTRL(i),
@@ -870,34 +1149,43 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 				     HMC7044_FORCE_MUTE_EN : 0));
 		if (ret)
 			return ret;
-		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_3(chan->num),
-				    chan->fine_delay & 0x1F);
-		if (ret)
-			return ret;
-		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_4(chan->num),
-				    chan->coarse_delay & 0x1F);
-		if (ret)
-			return ret;
-		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_7(chan->num),
-				    chan->out_mux_mode & 0x3);
-		if (ret)
-			return ret;
-		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_0(chan->num),
-				    (chan->start_up_mode_dynamic_enable ?
-				     HMC7044_START_UP_MODE_DYN_EN : 0) | NO_OS_BIT(4) |
-				    (chan->high_performance_mode_dis ?
-				     0 : HMC7044_HI_PERF_MODE) | HMC7044_SYNC_EN |
-				    HMC7044_CH_EN);
-		if (ret)
-			return ret;
 	}
 	no_os_mdelay(10);
 
-	/* Do a restart to reset the system and initiate calibration */
+	ret = hmc7044_debug_readback(dev, "before-autotune");
+	if (ret)
+		return ret;
+
+	/* Match the working Linux OS driver: restart, reseed, then request pulse. */
 	ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
 				 HMC7044_RESTART_DIV_FSM, 10000);
 	if (ret)
 		return ret;
+
+	for (pll2_wait_ms = 0; pll2_wait_ms <= 2000; pll2_wait_ms += 20) {
+		ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &pll2_alarm);
+		if (ret)
+			return ret;
+
+		ret = hmc7044_read(dev, HMC7044_REG_PLL2_STATUS_TV, &pll2_status);
+		if (ret)
+			return ret;
+
+		if (HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
+		    HMC7044_CAP_BANK_TUNEVAL(pll2_status))
+			break;
+
+		no_os_mdelay(20);
+	}
+
+	if (HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
+	    HMC7044_CAP_BANK_TUNEVAL(pll2_status))
+		pr_info("HMC7044 PLL2 autotune locked (wait=%u ms alarm=0x%02X cap=%u)\n",
+			pll2_wait_ms, pll2_alarm, HMC7044_CAP_BANK_TUNEVAL(pll2_status));
+	else
+		pr_warning("HMC7044 PLL2 autotune did not lock (wait=%u ms alarm=0x%02X status=0x%02X cap=%u)\n",
+			   pll2_wait_ms, pll2_alarm, pll2_status,
+			   HMC7044_CAP_BANK_TUNEVAL(pll2_status));
 
 	ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
 				 HMC7044_RESEED_REQ, 1000);
@@ -907,6 +1195,22 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0,
 			    (dev->high_performance_mode_clock_dist_en ?
 			     HMC7044_HIGH_PERF_DISTRIB_PATH : 0));
+	if (ret)
+		return ret;
+
+	/*
+	 * Keep this tail pulse aligned with the known-good Linux driver used
+	 * on this board: write 0x0001 = 0x04, then clear it.
+	 */
+	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0, HMC7044_PULSE_GEN_REQ);
+	if (ret)
+		return ret;
+
+	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0, 0x00);
+	if (ret)
+		return ret;
+
+	ret = hmc7044_debug_readback(dev, "after-restart");
 	if (ret)
 		return ret;
 
@@ -928,7 +1232,6 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 		if (chan->num >= HMC7044_NUM_CHAN || chan->disable)
 			continue;
 	}
-
 	ret = hmc7044_info(dev);
 	if (ret)
 		return ret;
@@ -961,9 +1264,11 @@ static int32_t hmc7043_setup(struct hmc7044_dev *dev)
 	no_os_mdelay(10);
 	hmc7044_write(dev, HMC7044_REG_SOFT_RESET, 0);
 	no_os_mdelay(10);
-
-	hmc7044_read_write_check(dev);
-
+	printf("%s: test\n", __func__);
+	// while(1){
+	//     hmc7044_read_write_check(dev);
+	//     no_os_mdelay(1000);
+	// }
 	/* Load the configuration updates (provided by Analog Devices) */
 	hmc7044_write(dev, HMC7044_REG_CLK_OUT_DRV_LOW_PW, 0x4d);
 	hmc7044_write(dev, HMC7044_REG_CLK_OUT_DRV_HIGH_PW, 0xdf);
@@ -1050,6 +1355,7 @@ static int32_t hmc7043_setup(struct hmc7044_dev *dev)
 		      (dev->high_performance_mode_clock_dist_en ?
 		       HMC7044_HIGH_PERF_DISTRIB_PATH : 0));
 	no_os_mdelay(1);
+
 
 	return 0;
 }
@@ -1528,6 +1834,7 @@ int32_t hmc7044_init(struct hmc7044_dev **device,
 	else
 		dev->pll1_cp_current = HMC7044_CP_CURRENT_DEF;
 	dev->pll2_freq = init_param->pll2_freq;
+	dev->pll2_freq_doubler_disable = init_param->pll2_freq_doubler_disable;
 	dev->pll1_loop_bw = init_param->pll1_loop_bw;
 
 	dev->sysref_timer_div = init_param->sysref_timer_div;

@@ -34,6 +34,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include "common.h"
 #include "mykonos.h"
 #include "mykonos_gpio.h"
@@ -2212,6 +2213,13 @@ mykonosErr_t MYKONOS_setRfPllFrequency(mykonosDevice_t *device, mykonosRfPllName
     {
         if (cmdStatusByte > 0)
         {
+            printf("MYKONOS_setRfPllFrequency ARM status: pll=%u freq=%lu cmdStatus=0x%02X errType=%u pending=%u waitRet=%d\n",
+                    (unsigned int)pllName,
+                    (unsigned long)rfPllLoFrequency_Hz,
+                    (unsigned int)cmdStatusByte,
+                    (unsigned int)((cmdStatusByte >> 1) & 0x07),
+                    (unsigned int)(cmdStatusByte & 0x01),
+                    (int)retVal);
             CMB_writeToLog(ADIHAL_LOG_ERROR, device->spiSettings->chipSelectIndex, MYKONOS_ERR_SETRFPLL_ARMERROR, getMykonosErrorMessage(MYKONOS_ERR_SETRFPLL_ARMERROR));
             return MYKONOS_ERR_SETRFPLL_ARMERROR;
         }
@@ -2221,6 +2229,13 @@ mykonosErr_t MYKONOS_setRfPllFrequency(mykonosDevice_t *device, mykonosRfPllName
 
     if (cmdStatusByte > 0)
     {
+        printf("MYKONOS_setRfPllFrequency ARM status: pll=%u freq=%lu cmdStatus=0x%02X errType=%u pending=%u waitRet=%d\n",
+                (unsigned int)pllName,
+                (unsigned long)rfPllLoFrequency_Hz,
+                (unsigned int)cmdStatusByte,
+                (unsigned int)((cmdStatusByte >> 1) & 0x07),
+                (unsigned int)(cmdStatusByte & 0x01),
+                (int)retVal);
         CMB_writeToLog(ADIHAL_LOG_ERROR, device->spiSettings->chipSelectIndex, MYKONOS_ERR_SETRFPLL_ARMERROR, getMykonosErrorMessage(MYKONOS_ERR_SETRFPLL_ARMERROR));
         return MYKONOS_ERR_SETRFPLL_ARMERROR;
     }

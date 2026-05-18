@@ -35,21 +35,28 @@ ADI_LOGLEVEL CMB_LOGLEVEL = ADIHAL_LOG_NONE;
 static uint32_t _desired_time_to_elapse_us = 0;
 struct no_os_spi_desc 	*spi_ad_desc;
 struct no_os_gpio_desc	*gpio_ad9371_resetb;
-struct no_os_gpio_desc	*gpio_ad9528_resetb;
-struct no_os_gpio_desc	*gpio_ad9528_sysref_req;
+// struct no_os_gpio_desc	*gpio_ad9528_resetb;
+// struct no_os_gpio_desc	*gpio_ad9528_sysref_req;
+struct no_os_gpio_desc	*gpio_hmc7044_reset;
+
 
 int32_t platform_init(void)
 {
 	struct no_os_spi_init_param spi_param;
 	struct no_os_gpio_init_param gpio_ad9371_resetb_param;
-	struct no_os_gpio_init_param gpio_ad9528_resetb_param;
-	struct no_os_gpio_init_param gpio_ad9528_sysref_param;
+	// struct no_os_gpio_init_param gpio_ad9528_resetb_param;
+	// struct no_os_gpio_init_param gpio_ad9528_sysref_param;
+    struct no_os_spi_init_param hmc7044_spi_init_param;
+	// struct no_os_gpio_init_param gpio_hmc7044_reset_param;
+    // struct no_os_gpio_init_param gpio_hmc7044_sysref_param;
 
 	int32_t status = 0;
 
 	gpio_ad9371_resetb_param.number = AD9371_RESET_B;
-	gpio_ad9528_resetb_param.number = AD9528_RESET_B;
-	gpio_ad9528_sysref_param.number = AD9528_SYSREF_REQ;
+	// gpio_ad9528_resetb_param.number = AD9528_RESET_B;
+	// gpio_ad9528_sysref_param.number = AD9528_SYSREF_REQ;
+    // gpio_hmc7044_reset_param.number = 59;
+    // gpio_hmc7044_sysref_param.number = 58;
 
 #ifndef ALTERA_PLATFORM
 	struct xil_spi_init_param xilinx_spi_param = {
@@ -74,10 +81,20 @@ int32_t platform_init(void)
 	spi_param.platform_ops = &xil_spi_ops;
 	gpio_ad9371_resetb_param.platform_ops = &xil_gpio_ops;
 	gpio_ad9371_resetb_param.extra = &xilinx_gpio_param;
-	gpio_ad9528_resetb_param.platform_ops = &xil_gpio_ops;
-	gpio_ad9528_resetb_param.extra = &xilinx_gpio_param;
-	gpio_ad9528_sysref_param.platform_ops = &xil_gpio_ops;
-	gpio_ad9528_sysref_param.extra = &xilinx_gpio_param;
+	// gpio_ad9528_resetb_param.platform_ops = &xil_gpio_ops;
+	// gpio_ad9528_resetb_param.extra = &xilinx_gpio_param;
+	// gpio_ad9528_sysref_param.platform_ops = &xil_gpio_ops;
+	// gpio_ad9528_sysref_param.extra = &xilinx_gpio_param;
+	hmc7044_spi_init_param.device_id = HMC7044_SPI_DEVICE_ID;
+	hmc7044_spi_init_param.extra = &xilinx_spi_param;
+	hmc7044_spi_init_param.platform_ops = &xil_spi_ops;
+	hmc7044_spi_init_param.mode = NO_OS_SPI_MODE_0;	
+	hmc7044_spi_init_param.chip_select = HMC7044_CS;
+	hmc7044_spi_init_param.max_speed_hz = 10000000u;
+
+    // ---- 若有硬件复位引脚 ----
+    // gpio_hmc7044_resetb_param.platform_ops = &xil_gpio_ops;
+    // gpio_hmc7044_resetb_param.extra        = &xilinx_gpio_param;
 #else
 	struct altera_spi_init_param altera_spi_param = {
 		.type = NIOS_II_SPI,
@@ -100,8 +117,10 @@ int32_t platform_init(void)
 	gpio_ad9528_sysref_param.extra = &altera_gpio_param;
 #endif
 	status = no_os_gpio_get(&gpio_ad9371_resetb, &gpio_ad9371_resetb_param);
-	status |= no_os_gpio_get(&gpio_ad9528_resetb, &gpio_ad9528_resetb_param);
-	status |= no_os_gpio_get(&gpio_ad9528_sysref_req, &gpio_ad9528_sysref_param);
+	// status |= no_os_gpio_get(&gpio_ad9528_resetb, &gpio_ad9528_resetb_param);
+	// status |= no_os_gpio_get(&gpio_ad9528_sysref_req, &gpio_ad9528_sysref_param);
+    // 新增（如有复位引脚）：
+    // status |= no_os_gpio_get(&gpio_hmc7044_resetb, &gpio_hmc7044_resetb_param);
 
 	spi_param.mode = NO_OS_SPI_MODE_0;
 	spi_param.chip_select = AD9371_CS;
@@ -117,8 +136,6 @@ int32_t platform_remove(void)
 	int32_t status;
 
 	status = no_os_gpio_remove(gpio_ad9371_resetb);
-	status |= no_os_gpio_remove(gpio_ad9528_resetb);
-	status |= no_os_gpio_remove(gpio_ad9528_sysref_req);
 
 	status |= no_os_spi_remove(spi_ad_desc);
 
@@ -142,9 +159,6 @@ commonErr_t CMB_hardReset(uint8_t spiChipSelectIndex)
 	switch (spiChipSelectIndex) {
 	case AD9371_CS:
 		reset_gpio = gpio_ad9371_resetb;
-		break;
-	case AD9528_CS:
-		reset_gpio = gpio_ad9528_resetb;
 		break;
 	default:
 		return (COMMONERR_FAILED);
