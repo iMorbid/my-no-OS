@@ -1728,6 +1728,8 @@ mykonosErr_t MYKONOS_waitForEvent(mykonosDevice_t *device, waitEvent_t waitEvent
 
         if ((uint32_t)CMB_hasTimeoutExpired() > 0)
         {
+            printf("MYKONOS_waitForEvent timeout: event=%u reg=0x%03X bit=%u expect=%u last=0x%02X\n",
+                   waitEvent, spiAddr, spiBit, doneBitLevel, data);
             CMB_writeToLog(ADIHAL_LOG_WARNING, device->spiSettings->chipSelectIndex, errCode, getMykonosErrorMessage(errCode));
             return errCode;
         }
@@ -1988,6 +1990,14 @@ mykonosErr_t MYKONOS_initDigitalClocks(mykonosDevice_t *device)
 
     clockControl2 |= ((deviceClkDiv & 3) << 4);
 
+    printf("MYKONOS CLKPLL config: devclk=%lu kHz scaled_ref=%lu kHz clkdiv=%u vco=%lu kHz vcodiv=%u hsdiv=%u\n",
+           (unsigned long)device->clocks->deviceClock_kHz,
+           (unsigned long)scaledRefClk_kHz,
+           deviceClkDiv,
+           (unsigned long)device->clocks->clkPllVcoFreq_kHz,
+           vcoDiv,
+           hsDiv);
+
     /* find vco table index based on vco frequency */
     for (i = 0; device->clocks->clkPllVcoFreq_kHz < vcoFreqArray_kHz[i]; i++)
     {
@@ -2108,11 +2118,19 @@ mykonosErr_t MYKONOS_initDigitalClocks(mykonosDevice_t *device)
         //return MYKONOS_ERR_SETCLKPLL_INV_FRACWORD;
         sdmSettings = 0x20;
     }
+
     else
     {
         /* Bypass SDM */
         sdmSettings = 0xE0;
     }
+
+    printf("MYKONOS CLKPLL words: hsDigClk=%lu Hz int=%u frac=%lu clockControl2=0x%02X sdm=0x%02X\n",
+           (unsigned long)hsDigClk_Hz,
+           integerWord,
+           (unsigned long)fractionalWord,
+           clockControl2,
+           sdmSettings);
 
     /* Set PLL fractional word[22:0] */
     CMB_SPIWriteByte(device->spiSettings, MYKONOS_ADDR_CLK_SYNTH_DIVIDER_FRAC_BYTE0, (fractionalWord & 0xFF));

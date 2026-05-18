@@ -814,6 +814,7 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 	uint32_t i, c, ref_en = 0;
 	uint8_t pll2_alarm, pll2_status;
 	uint32_t pll2_wait_ms;
+	bool pll2_locked_before_restart;
 	int ret;
 
 	vcxo_freq = dev->vcxo_freq / 1000;
@@ -1156,59 +1157,75 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 	if (ret)
 		return ret;
 
-	/* Match the working Linux OS driver: restart, reseed, then request pulse. */
-	ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
-				 HMC7044_RESTART_DIV_FSM, 10000);
+	ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &pll2_alarm);
 	if (ret)
 		return ret;
 
-	for (pll2_wait_ms = 0; pll2_wait_ms <= 2000; pll2_wait_ms += 20) {
-		ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &pll2_alarm);
+	ret = hmc7044_read(dev, HMC7044_REG_PLL2_STATUS_TV, &pll2_status);
+	if (ret)
+		return ret;
+
+	pll2_locked_before_restart = HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
+				     HMC7044_CAP_BANK_TUNEVAL(pll2_status);
+
+	if (pll2_locked_before_restart) {
+		pr_info("HMC7044 PLL2 already locked; skip divider FSM restart (alarm=0x%02X cap=%u)\n",
+			pll2_alarm, HMC7044_CAP_BANK_TUNEVAL(pll2_status));
+	} else {
+		/* Restart only when PLL2 did not lock during the normal setup path. */
+		ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
+					 HMC7044_RESTART_DIV_FSM, 10000);
 		if (ret)
 			return ret;
 
-		ret = hmc7044_read(dev, HMC7044_REG_PLL2_STATUS_TV, &pll2_status);
-		if (ret)
-			return ret;
+		for (pll2_wait_ms = 0; pll2_wait_ms <= 2000; pll2_wait_ms += 20) {
+			ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &pll2_alarm);
+			if (ret)
+				return ret;
+
+			ret = hmc7044_read(dev, HMC7044_REG_PLL2_STATUS_TV, &pll2_status);
+			if (ret)
+				return ret;
+
+			if (HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
+			    HMC7044_CAP_BANK_TUNEVAL(pll2_status))
+				break;
+
+			no_os_mdelay(20);
+		}
 
 		if (HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
 		    HMC7044_CAP_BANK_TUNEVAL(pll2_status))
-			break;
-
-		no_os_mdelay(20);
+			pr_info("HMC7044 PLL2 restart locked (wait=%u ms alarm=0x%02X cap=%u)\n",
+				pll2_wait_ms, pll2_alarm,
+				HMC7044_CAP_BANK_TUNEVAL(pll2_status));
+		else
+			pr_warning("HMC7044 PLL2 restart did not lock (wait=%u ms alarm=0x%02X status=0x%02X cap=%u)\n",
+				   pll2_wait_ms, pll2_alarm, pll2_status,
+				   HMC7044_CAP_BANK_TUNEVAL(pll2_status));
 	}
 
-	if (HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
-	    HMC7044_CAP_BANK_TUNEVAL(pll2_status))
-		pr_info("HMC7044 PLL2 autotune locked (wait=%u ms alarm=0x%02X cap=%u)\n",
-			pll2_wait_ms, pll2_alarm, HMC7044_CAP_BANK_TUNEVAL(pll2_status));
-	else
-		pr_warning("HMC7044 PLL2 autotune did not lock (wait=%u ms alarm=0x%02X status=0x%02X cap=%u)\n",
-			   pll2_wait_ms, pll2_alarm, pll2_status,
-			   HMC7044_CAP_BANK_TUNEVAL(pll2_status));
+	if (!pll2_locked_before_restart) {
+		ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
+					 HMC7044_RESEED_REQ, 1000);
+		if (ret)
+			return ret;
 
-	ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
-				 HMC7044_RESEED_REQ, 1000);
-	if (ret)
-		return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0,
+				    (dev->high_performance_mode_clock_dist_en ?
+				     HMC7044_HIGH_PERF_DISTRIB_PATH : 0));
+		if (ret)
+			return ret;
 
-	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0,
-			    (dev->high_performance_mode_clock_dist_en ?
-			     HMC7044_HIGH_PERF_DISTRIB_PATH : 0));
-	if (ret)
-		return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0,
+				    HMC7044_PULSE_GEN_REQ);
+		if (ret)
+			return ret;
 
-	/*
-	 * Keep this tail pulse aligned with the known-good Linux driver used
-	 * on this board: write 0x0001 = 0x04, then clear it.
-	 */
-	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0, HMC7044_PULSE_GEN_REQ);
-	if (ret)
-		return ret;
-
-	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0, 0x00);
-	if (ret)
-		return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0, 0x00);
+		if (ret)
+			return ret;
+	}
 
 	ret = hmc7044_debug_readback(dev, "after-restart");
 	if (ret)
