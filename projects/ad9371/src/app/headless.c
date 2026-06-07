@@ -243,10 +243,12 @@ int main(void)
 	struct axi_clkgen *tx_clkgen;
 	struct axi_clkgen *rx_os_clkgen;
 #endif
+	mykDevice.rx->rxProfile->iqRate_kHz=61440;
 	uint32_t rx_lane_rate_khz = mykDevice.rx->rxProfile->iqRate_kHz *
 				    mykDevice.rx->framer->M * (20 /
 						    no_os_hweight8(mykDevice.rx->framer->serializerLanesEnabled));
 	uint32_t rx_div40_rate_hz = rx_lane_rate_khz * (1000 / 40);
+	printf("hzzzzzzzzzzzzzzzzzzzzzzzz %d",mykDevice.rx->rxProfile->iqRate_kHz);
 	uint32_t tx_lane_rate_khz = mykDevice.tx->txProfile->iqRate_kHz *
 				    mykDevice.tx->deframer->M * (20 /
 						    no_os_hweight8(mykDevice.tx->deframer->deserializerLanesEnabled));
