@@ -79,6 +79,7 @@ uint32_t dac_buffer[DAC_BUFFER_SAMPLES] __attribute__((aligned(1024)));
 uint16_t adc_buffer[ADC_BUFFER_SAMPLES * ADC_CHANNELS] __attribute__((
 			aligned(1024)));
 #endif
+
 /***************************************************************************//**
  * @brief main
 *******************************************************************************/
@@ -255,6 +256,19 @@ int main(void)
 				       mykDevice.obsRx->framer->M * (20 /
 						       no_os_hweight8(mykDevice.obsRx->framer->serializerLanesEnabled));
 	uint32_t rx_os_div40_rate_hz = rx_os_lane_rate_khz * (1000 / 40);
+
+	printf("PROFILE rates: rx=%lu kHz tx=%lu kHz orx=%lu kHz\n",
+	       (unsigned long)mykDevice.rx->rxProfile->iqRate_kHz,
+	       (unsigned long)mykDevice.tx->txProfile->iqRate_kHz,
+	       (unsigned long)mykDevice.obsRx->orxProfile->iqRate_kHz);
+	printf("JESD rates: rx_lane=%lu kHz rx_link=%lu Hz tx_lane=%lu kHz tx_link=%lu Hz orx_lane=%lu kHz orx_link=%lu Hz\n",
+	       (unsigned long)rx_lane_rate_khz,
+	       (unsigned long)rx_div40_rate_hz,
+	       (unsigned long)tx_lane_rate_khz,
+	       (unsigned long)tx_div40_rate_hz,
+	       (unsigned long)rx_os_lane_rate_khz,
+	       (unsigned long)rx_os_div40_rate_hz);
+
 	struct jesd204_rx_init rx_jesd_init = {
 		"rx_jesd",
 		RX_JESD_BASEADDR,

@@ -11,7 +11,7 @@
  * 122.88MHz
  *
  * Profiles:
- * Rx 100MHz, IQrate 122.88MSPS, Dec5
+ * Rx 40MHz, IQrate 61.44MSPS, Dec5
  * Tx 75/200MHz, IQrate 245.76MSPS, Dec5
  * ORX 200MHz, IQrate 245.76MSPS, Dec5
  * SRx 20MHz, IQrate 30.72MSPS, Dec5
@@ -31,7 +31,7 @@ static mykonosFir_t txFir = {
 	&txFirCoefs[0]  /* A pointer to an array of filter coefficients*/
 };
 
-static int16_t rxFirCoefs[] = {-20, 6, 66, 22, -128, -54, 240, 126, -402, -248, 634, 444, -956, -756, 1400, 1244, -2028, -2050, 2978, 3538, -4646, -7046, 9536, 30880, 30880, 9536, -7046, -4646, 3538, 2978, -2050, -2028, 1244, 1400, -756, -956, 444, 634, -248, -402, 126, 240, -54, -128, 22, 66, 6, -20};
+static int16_t rxFirCoefs[] = {-1, 4, 4, -17, -16, 47, 51, -101, -141, 180, 330, -261, -681, 286, 1268, -146, -2180, -369, 3569, 1706, -5903, -5632, 11061, 30212, 30212, 11061, -5632, -5903, 1706, 3569, -369, -2180, -146, 1268, 286, -681, -261, 330, 180, -141, -101, 51, 47, -16, -17, 4, 4, -1};
 
 static mykonosFir_t rxFir = {
 	-6,             /* Filter gain in dB*/
@@ -255,16 +255,16 @@ static mykonosAgcCfg_t obsRxAgcConfig = {
 
 
 static mykonosRxProfile_t rxProfile = {
-	/* Rx 100MHz, IQrate 122.88MSPS, Dec5 */
+	/* Rx 40MHz, IQrate 61.44MSPS, Dec5 */
 	1,              /* The divider used to generate the ADC clock*/
 	&rxFir,         /* Pointer to Rx FIR filter structure*/
 	2,              /* Rx FIR decimation (1,2,4)*/
 	5,              /* Decimation of Dec5 or Dec4 filter (5,4)*/
 	1,              /* If set, and DEC5 filter used, will use a higher rejection DEC5 FIR filter (1=Enabled, 0=Disabled)*/
-	1,              /* RX Half band 1 decimation (1 or 2)*/
-	122880,         /* Rx IQ data rate in kHz*/
-	100000000,      /* The Rx RF passband bandwidth for the profile*/
-	100000,         /* Rx BBF 3dB corner in kHz*/
+	2,              /* RX Half band 1 decimation (1 or 2)*/
+	61440,          /* Rx IQ data rate in kHz*/
+	40000000,       /* The Rx RF passband bandwidth for the profile*/
+	40000,          /* Rx BBF 3dB corner in kHz*/
 	NULL            /* pointer to custom ADC profile*/
 };
 
