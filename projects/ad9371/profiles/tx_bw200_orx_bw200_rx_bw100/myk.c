@@ -261,10 +261,15 @@ static mykonosRxProfile_t rxProfile = {
 	2,              /* Rx FIR decimation (1,2,4)*/
 	5,              /* Decimation of Dec5 or Dec4 filter (5,4)*/
 	1,              /* If set, and DEC5 filter used, will use a higher rejection DEC5 FIR filter (1=Enabled, 0=Disabled)*/
-	2,              /* RX Half band 1 decimation (1 or 2)*/
-	61440,          /* Rx IQ data rate in kHz*/
-	40000000,       /* The Rx RF passband bandwidth for the profile*/
-	40000,          /* Rx BBF 3dB corner in kHz*/
+	// 2,              /* RX Half band 1 decimation (1 or 2)*/
+	// 61440,          /* Rx IQ data rate in kHz*/
+	// 40000000,       /* The Rx RF passband bandwidth for the profile*/
+	// 40000,          /* Rx BBF 3dB corner in kHz*/
+	1,              /* RX Half band 1 decimation (1 or 2)*/
+	// 122880/2,         /* Rx IQ data rate in kHz*/
+	122880,		 /* Rx IQ data rate in kHz*/
+	100000000,      /* The Rx RF passband bandwidth for the profile*/
+	100000,         /* Rx BBF 3dB corner in kHz*/
 	NULL            /* pointer to custom ADC profile*/
 };
 
