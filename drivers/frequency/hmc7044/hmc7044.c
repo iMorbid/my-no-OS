@@ -757,6 +757,11 @@ static int hmc7044_debug_readback(struct hmc7044_dev *dev, const char *tag)
 		{ HMC7044_REG_ALARM_READBACK, "ALARM" },
 		{ HMC7044_REG_PLL2_STATUS_TV, "PLL2_STATUS_TV" },
 	};
+	struct hmc7044_chan_spec *chan;
+	uint8_t ctrl0;
+	uint8_t ctrl8;
+	uint8_t div_lsb;
+	uint8_t div_msb;
 	uint8_t val;
 	uint32_t i;
 	int ret;
@@ -768,6 +773,34 @@ static int hmc7044_debug_readback(struct hmc7044_dev *dev, const char *tag)
 
 		pr_info("HMC7044 %s: %s[0x%04X] = 0x%02X\n",
 			tag, regs[i].name, regs[i].reg, val);
+	}
+
+	for (i = 0; i < dev->num_channels; i++) {
+		chan = &dev->channels[i];
+		if (chan->disable || !chan->is_sysref)
+			continue;
+
+		ret = hmc7044_read(dev, HMC7044_REG_CH_OUT_CRTL_0(chan->num),
+				   &ctrl0);
+		if (ret)
+			return ret;
+		ret = hmc7044_read(dev, HMC7044_REG_CH_OUT_CRTL_1(chan->num),
+				   &div_lsb);
+		if (ret)
+			return ret;
+		ret = hmc7044_read(dev, HMC7044_REG_CH_OUT_CRTL_2(chan->num),
+				   &div_msb);
+		if (ret)
+			return ret;
+		ret = hmc7044_read(dev, HMC7044_REG_CH_OUT_CRTL_8(chan->num),
+				   &ctrl8);
+		if (ret)
+			return ret;
+
+		pr_info("HMC7044 %s: CH%u SYSREF CTRL0=0x%02X DIV=%u (0x%02X%02X) CTRL8=0x%02X\n",
+			tag, chan->num, ctrl0,
+			((uint16_t)(div_msb & 0x0F) << 8) | div_lsb,
+			div_msb, div_lsb, ctrl8);
 	}
 
 	ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &val);
@@ -1150,6 +1183,32 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 				     HMC7044_FORCE_MUTE_EN : 0));
 		if (ret)
 			return ret;
+
+		/*
+		 * Original shortened HMC7044 setup ended after CTRL8 and did not
+		 * program CTRL3, CTRL4, CTRL7 or CTRL0.
+		 */
+		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_3(chan->num),
+				    chan->fine_delay & 0x1F);
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_4(chan->num),
+				    chan->coarse_delay & 0x1F);
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_7(chan->num),
+				    chan->out_mux_mode & 0x3);
+		if (ret)
+			return ret;
+		ret = hmc7044_write(dev, HMC7044_REG_CH_OUT_CRTL_0(chan->num),
+				    (chan->start_up_mode_dynamic_enable ?
+				     HMC7044_START_UP_MODE_DYN_EN : 0) |
+				    HMC7044_RB4_EN |
+				    (chan->high_performance_mode_dis ?
+				     0 : HMC7044_HI_PERF_MODE) |
+				    HMC7044_SYNC_EN | HMC7044_CH_EN);
+		if (ret)
+			return ret;
 	}
 	no_os_mdelay(10);
 
@@ -1168,64 +1227,68 @@ static int32_t hmc7044_setup(struct hmc7044_dev *dev)
 	pll2_locked_before_restart = HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
 				     HMC7044_CAP_BANK_TUNEVAL(pll2_status);
 
-	if (pll2_locked_before_restart) {
-		pr_info("HMC7044 PLL2 already locked; skip divider FSM restart (alarm=0x%02X cap=%u)\n",
-			pll2_alarm, HMC7044_CAP_BANK_TUNEVAL(pll2_status));
-	} else {
-		/* Restart only when PLL2 did not lock during the normal setup path. */
-		ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
-					 HMC7044_RESTART_DIV_FSM, 10000);
+	/*
+	 * Original behavior for comparison:
+	 * if (pll2_locked_before_restart), skip RESTART_DIV_FSM;
+	 * otherwise restart the divider FSM and wait for PLL2 lock.
+	 */
+	pr_info("HMC7044 PLL2 %s before unconditional divider FSM restart (alarm=0x%02X cap=%u)\n",
+		pll2_locked_before_restart ? "locked" : "not locked",
+		pll2_alarm, HMC7044_CAP_BANK_TUNEVAL(pll2_status));
+
+	ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
+				 HMC7044_RESTART_DIV_FSM, 10000);
+	if (ret)
+		return ret;
+
+	for (pll2_wait_ms = 0; pll2_wait_ms <= 2000; pll2_wait_ms += 20) {
+		ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &pll2_alarm);
 		if (ret)
 			return ret;
 
-		for (pll2_wait_ms = 0; pll2_wait_ms <= 2000; pll2_wait_ms += 20) {
-			ret = hmc7044_read(dev, HMC7044_REG_ALARM_READBACK, &pll2_alarm);
-			if (ret)
-				return ret;
-
-			ret = hmc7044_read(dev, HMC7044_REG_PLL2_STATUS_TV, &pll2_status);
-			if (ret)
-				return ret;
-
-			if (HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
-			    HMC7044_CAP_BANK_TUNEVAL(pll2_status))
-				break;
-
-			no_os_mdelay(20);
-		}
+		ret = hmc7044_read(dev, HMC7044_REG_PLL2_STATUS_TV, &pll2_status);
+		if (ret)
+			return ret;
 
 		if (HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
 		    HMC7044_CAP_BANK_TUNEVAL(pll2_status))
-			pr_info("HMC7044 PLL2 restart locked (wait=%u ms alarm=0x%02X cap=%u)\n",
-				pll2_wait_ms, pll2_alarm,
-				HMC7044_CAP_BANK_TUNEVAL(pll2_status));
-		else
-			pr_warning("HMC7044 PLL2 restart did not lock (wait=%u ms alarm=0x%02X status=0x%02X cap=%u)\n",
-				   pll2_wait_ms, pll2_alarm, pll2_status,
-				   HMC7044_CAP_BANK_TUNEVAL(pll2_status));
+			break;
+
+		no_os_mdelay(20);
 	}
 
-	if (!pll2_locked_before_restart) {
-		ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
-					 HMC7044_RESEED_REQ, 1000);
-		if (ret)
-			return ret;
-
-		ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0,
-				    (dev->high_performance_mode_clock_dist_en ?
-				     HMC7044_HIGH_PERF_DISTRIB_PATH : 0));
-		if (ret)
-			return ret;
-
-		ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0,
-				    HMC7044_PULSE_GEN_REQ);
-		if (ret)
-			return ret;
-
-		ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0, 0x00);
-		if (ret)
-			return ret;
+	if (HMC7044_PLL2_LOCK_DETECT(pll2_alarm) &&
+	    HMC7044_CAP_BANK_TUNEVAL(pll2_status))
+		pr_info("HMC7044 PLL2 restart locked (wait=%u ms alarm=0x%02X cap=%u)\n",
+			pll2_wait_ms, pll2_alarm,
+			HMC7044_CAP_BANK_TUNEVAL(pll2_status));
+	else {
+		pr_err("HMC7044 PLL2 restart did not lock (wait=%u ms alarm=0x%02X status=0x%02X cap=%u)\n",
+		       pll2_wait_ms, pll2_alarm, pll2_status,
+		       HMC7044_CAP_BANK_TUNEVAL(pll2_status));
+		return -EIO;
 	}
+
+	/* Original: RESEED ran only inside if (!pll2_locked_before_restart). */
+	ret = hmc7044_toggle_bit(dev, HMC7044_REG_REQ_MODE_0,
+				 HMC7044_RESEED_REQ, 1000);
+	if (ret)
+		return ret;
+
+	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0,
+			    (dev->high_performance_mode_clock_dist_en ?
+			     HMC7044_HIGH_PERF_DISTRIB_PATH : 0));
+	if (ret)
+		return ret;
+
+	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0,
+			    HMC7044_PULSE_GEN_REQ);
+	if (ret)
+		return ret;
+
+	ret = hmc7044_write(dev, HMC7044_REG_REQ_MODE_0, 0x00);
+	if (ret)
+		return ret;
 
 	ret = hmc7044_debug_readback(dev, "after-restart");
 	if (ret)

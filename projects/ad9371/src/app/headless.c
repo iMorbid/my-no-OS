@@ -74,6 +74,19 @@
 // extern ad9528Device_t clockAD9528_;
 extern mykonosDevice_t mykDevice;
 
+static int32_t ad9371_request_sysref(struct hmc7044_dev *hmc7044_device,
+				    const char *stage)
+{
+	int32_t status;
+
+	status = hmc7044_requestsysref(hmc7044_device);
+	if (status)
+		printf("HMC7044 SYSREF request failed during %s: %ld\n",
+		       stage, (long)status);
+
+	return status;
+}
+
 #if defined(DMA_EXAMPLE) || defined(IIO_SUPPORT)
 uint32_t dac_buffer[DAC_BUFFER_SAMPLES] __attribute__((aligned(1024)));
 uint16_t adc_buffer[ADC_BUFFER_SAMPLES * ADC_CHANNELS] __attribute__((
@@ -119,19 +132,21 @@ int main(void)
 		},
 		/* hmc7044_c11: channel@11 */
 		{
-			.disable = 0, .num = 11, .divider = 2000, .driver_mode = 1,
+			.disable = 0, .num = 11, .divider = 1280, .driver_mode = 1,//1280
 			.force_mute_enable = true,
 			.is_sysref = true,
-			.start_up_mode_dynamic_enable = false,
-			.high_performance_mode_dis = false
+			.start_up_mode_dynamic_enable = true,
+			.dynamic_driver_enable = false,
+			.high_performance_mode_dis = true
 		},
 		/* hmc7044_c13: channel@13 */
 		{
-			.disable = 0, .num = 13, .divider = 2000, .driver_mode = 1,
+			.disable = 0, .num = 13, .divider = 1280, .driver_mode = 1,//2000
 			.force_mute_enable = true,
 			.is_sysref = true,
-			.start_up_mode_dynamic_enable = false,
-			.high_performance_mode_dis = false
+			.start_up_mode_dynamic_enable = true,
+			.dynamic_driver_enable = false,
+			.high_performance_mode_dis = true
 		},
 	};
 
@@ -143,8 +158,9 @@ int main(void)
 		.pll2_freq = 2457600000,
 		.pll2_freq_doubler_disable = false,
 		.pll1_loop_bw = 200,
-		.sysref_timer_div = 1024,
-		.pulse_gen_mode = HMC7044_PULSE_GEN_CONT_PULSE,
+		/* Match the dynamic channel divider to generate exactly one pulse. */
+		.sysref_timer_div = 1280,//1024 1280 2560
+		.pulse_gen_mode = HMC7044_PULSE_GEN_CONT_PULSE,//HMC7044_PULSE_GEN_CONT_PULSE  HMC7044_PULSE_GEN_1_PULSE
 		.in_buf_mode = {0, 0, 0, 0, 0x07},
 		.gpi_ctrl = {0x00, 0x00, 0x00, 0x00},
 		.gpo_ctrl = {0x00, 0x00, 0x00, 0x00},
@@ -190,6 +206,7 @@ int main(void)
 	uint8_t framerStatus;
 	uint8_t obsFramerStatus;
 	uint8_t deframerStatus;
+	uint16_t ilasMismatch;
 	uint32_t trackingCalMask = TRACK_ORX1_QEC | TRACK_ORX2_QEC | TRACK_RX1_QEC |
 				   TRACK_RX2_QEC | TRACK_TX1_QEC | TRACK_TX2_QEC;
 	int32_t status;
@@ -244,12 +261,11 @@ int main(void)
 	struct axi_clkgen *tx_clkgen;
 	struct axi_clkgen *rx_os_clkgen;
 #endif
-	mykDevice.rx->rxProfile->iqRate_kHz=122880;//61440 30720
+	// mykDevice.rx->rxProfile->iqRate_kHz=122880/4;
 	uint32_t rx_lane_rate_khz = mykDevice.rx->rxProfile->iqRate_kHz *
 				    mykDevice.rx->framer->M * (20 /
 						    no_os_hweight8(mykDevice.rx->framer->serializerLanesEnabled));
 	uint32_t rx_div40_rate_hz = rx_lane_rate_khz * (1000 / 40);
-	printf("hzzzzzzzzzzzzzzzzzzzzzzzz %d",mykDevice.rx->rxProfile->iqRate_kHz);
 	uint32_t tx_lane_rate_khz = mykDevice.tx->txProfile->iqRate_kHz *
 				    mykDevice.tx->deframer->M * (20 /
 						    no_os_hweight8(mykDevice.tx->deframer->deserializerLanesEnabled));
@@ -644,14 +660,14 @@ int main(void)
 	// no_os_mdelay(1);
 	// AD9528_requestSysref(clockAD9528_device, 1);
 	// no_os_mdelay(1);
-	hmc7044_requestsysref(hmc7044_device);
-	no_os_mdelay(1);
-	hmc7044_requestsysref(hmc7044_device);
-	no_os_mdelay(1);
-	hmc7044_requestsysref(hmc7044_device);
-	no_os_mdelay(1);
-	hmc7044_requestsysref(hmc7044_device);
-	no_os_mdelay(1);
+	for (i = 0; i < 4; i++) {
+		status = ad9371_request_sysref(hmc7044_device, "MCS");
+		if (status) {
+			errorString = "HMC7044 failed to generate an MCS SYSREF pulse\n";
+			goto error_11;
+		}
+		no_os_mdelay(1);
+	}
 
 
 	/*************************************************************************/
@@ -951,7 +967,11 @@ int main(void)
 	/* Request a SYSREF from the AD9528 */
 	// AD9528_requestSysref(clockAD9528_device, 1);
 	// no_os_mdelay(1);
-	hmc7044_requestsysref(hmc7044_device);
+	status = ad9371_request_sysref(hmc7044_device, "JESD TX start");
+	if (status) {
+		errorString = "HMC7044 failed to generate the JESD TX SYSREF pulse\n";
+		goto error_11;
+	}
 	// hmc7044_requestsysref(hmc7044_device);   // 第一处
     no_os_mdelay(1);
 
@@ -981,9 +1001,17 @@ int main(void)
 	// no_os_mdelay(1);
 	// AD9528_requestSysref(clockAD9528_device, 1);
 	// no_os_mdelay(5);
-	hmc7044_requestsysref(hmc7044_device);
+	status = ad9371_request_sysref(hmc7044_device, "JESD RX/ORX start 1");
+	if (status) {
+		errorString = "HMC7044 failed to generate the first JESD RX SYSREF pulse\n";
+		goto error_11;
+	}
 	no_os_mdelay(1);
-	hmc7044_requestsysref(hmc7044_device);
+	status = ad9371_request_sysref(hmc7044_device, "JESD RX/ORX start 2");
+	if (status) {
+		errorString = "HMC7044 failed to generate the second JESD RX SYSREF pulse\n";
+		goto error_11;
+	}
 	no_os_mdelay(5);
 	// hmc7044_requestsysref(hmc7044_device);   // 第二处 ×2
     // no_os_mdelay(1);
@@ -998,15 +1026,19 @@ int main(void)
 			&framerStatus)) != MYKONOS_ERR_OK) {
 		errorString = getMykonosErrorMessage(mykError);
 		goto error_11;
-	} else if (framerStatus != 0x3E)
-		printf("RxFramerStatus = 0x%x\n", framerStatus);
+	} else {
+		printf("RxFramerStatus = 0x%02x (%s)\n", framerStatus,
+		       framerStatus == 0x3E ? "OK" : "ERROR");
+	}
 
 	if ((mykError = MYKONOS_readOrxFramerStatus(&mykDevice,
 			&obsFramerStatus)) != MYKONOS_ERR_OK) {
 		errorString = getMykonosErrorMessage(mykError);
 		goto error_11;
-	} else if (obsFramerStatus != 0x3E)
-		printf("OrxFramerStatus = 0x%x\n", obsFramerStatus);
+	} else {
+		printf("OrxFramerStatus = 0x%02x (%s)\n", obsFramerStatus,
+		       obsFramerStatus == 0x3E ? "OK" : "ERROR");
+	}
 
 	/*************************************************************************/
 	/*****               Check Mykonos Deframer Status                   *****/
@@ -1016,8 +1048,21 @@ int main(void)
 			&deframerStatus)) != MYKONOS_ERR_OK) {
 		errorString = getMykonosErrorMessage(mykError);
 		goto error_11;
-	} else if (deframerStatus != 0x28)
-		printf("DeframerStatus = 0x%x\n", deframerStatus);
+	} else {
+		printf("DeframerStatus = 0x%02x (%s)\n", deframerStatus,
+		       deframerStatus == 0x28 ? "OK" : "ERROR");
+
+		if (deframerStatus != 0x28) {
+			ilasMismatch = 0;
+			mykError = MYKONOS_jesd204bIlasCheck(&mykDevice,
+							    &ilasMismatch);
+			if (mykError == MYKONOS_ERR_OK)
+				printf("Deframer ILAS mismatch = 0x%04x "
+				       "(bit15=any mismatch)\n", ilasMismatch);
+			else
+				printf("Deframer ILAS diagnostic failed: %d\n", mykError);
+		}
+	}
 
 	/*************************************************************************/
 	/*****           Mykonos enable tracking calibrations                *****/
@@ -1051,8 +1096,11 @@ int main(void)
 		goto error_11;
 	}
 
-	axi_jesd204_rx_watchdog(rx_jesd);
-	axi_jesd204_rx_watchdog(rx_os_jesd);
+	/*
+	 * Do not run the RX watchdog during initial one-shot SYSREF bring-up.
+	 * Its FPGA-only reset does not restart the Mykonos framer or issue a new
+	 * SYSREF, so it can break a subclass-1 link before the first status dump.
+	 */
 
 	no_os_mdelay(1000);
 
